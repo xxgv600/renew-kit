@@ -63,7 +63,25 @@ jobs:
           NODE_LINK: ${{ secrets.NODE_LINK }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           AUT0_NOTIFY_SKIP: "1"
-          
+
+      - name: 📸 推送截图到 Telegram
+        if: always()
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: |
+          n=0
+          for img in *.png; do
+            [ -f "$img" ] || continue
+            [ $n -ge 3 ] && break
+            echo "发送截图: $img"
+            curl -sS --max-time 30 -o /dev/null \
+              -F chat_id="$TG_CHAT_ID" \
+              -F photo=@"$img" \
+              "https://api.telegram.org/bot$TG_BOT_TOKEN/sendPhoto" || true
+            n=$((n+1))
+          done
+
       - name: 🧽 清理进程和临时文件
         if: always()
         run: |

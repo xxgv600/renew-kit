@@ -62,7 +62,8 @@ jobs:
           ACCOUNT_LABEL: "02"
           NODE_LINK: ${{ secrets.NODE_LINK }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
-
+          AUT0_NOTIFY_SKIP: "1"
+          
       - name: 🧽 清理进程和临时文件
         if: always()
         run: |

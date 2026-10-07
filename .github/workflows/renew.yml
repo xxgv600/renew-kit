@@ -1,0 +1,84 @@
+name: Auto Renew Bot-hosting
+
+on:
+  schedule:
+    - cron: '20 1 * * *' # 每日 UTC 01:20 = 北京时间 09:20
+      # 原 0 点整：GitHub schedule 排队高峰常有数小时延迟（实测迟过 4h47m），错开减少延迟。
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run（照登录/读状态，但不回写 SESSION_TOKEN 到 Secret）'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  Renew-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # Turnstile 最长等 240s + 后台确认轮询 90s + 整页重载，比默认 360 分钟小得多，
+    # 但设个上限，免得卡死后白占 runner 直到超时。
+    concurrency:
+      group: aut0-renew-bot-hosting
+      cancel-in-progress: false
+    permissions:
+      actions: write   # 末尾「清理旧 run 记录」要删 run，必须 write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 🔄 运行续期脚本（renew-kit）
+        uses: jardanlau2020/renew-kit/.github/actions/renew@v0.5.3
+        with:
+          script: app.py
+          python-version: "3.12"
+          renewkit-ref: v0.5.3
+          apt-packages: "xvfb x11-utils xdotool scrot fonts-noto-cjk jq wget"
+          pip-packages: "seleniumbase requests"
+          # 多行：chromedriver 装失败也不挡代理（action 的 setup step 是
+          # set -uo pipefail 无 -e，且默认 continue-on-error）。
+          setup-command: |
+            seleniumbase install chromedriver
+            bash scripts/setup_proxy.sh
+          command: 'xvfb-run --auto-servernum python3 app.py'
+          artifact-paths: "*.png"
+          artifact-name: bot-hosting-screenshots-02
+          notify-on-failure: "true"
+        env:
+          EMAIL: ${{ secrets.EMAIL }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          SESSION_TOKEN: ${{ secrets.SESSION_TOKEN }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          ACCOUNT_LABEL: "02"
+          NODE_LINK: ${{ secrets.NODE_LINK }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+
+      - name: 🧽 清理进程和临时文件
+        if: always()
+        run: |
+          pkill -f sing-box || true
+          pkill -f chromedriver || true
+          pkill -f chrome || true
+          pkill -f Xvfb || true
+          rm -f sing-box sing-box-config.json sing-box.log
+
+      - name: 🧹 清理旧的工作流运行记录
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 只保留最近 5 条。原实现 count>1 就删，等于每次只留 1 条 ——
+          # 出问题（例如续期报「结果未知」）时根本回看不了日志。
+          KEEP=5
+          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
+          count=0
+          for run_id in $runs; do
+            count=$((count + 1))
+            if [ $count -gt $KEEP ]; then
+              echo "删除运行记录: $run_id"
+              gh run delete $run_id || true
+            fi
+          done

@@ -1002,6 +1002,16 @@ def run_all() -> RenewReport:
                             if match:
                                 countdown_text = match.group(1)
                             break
+                        elif "cooldown" in button_text.lower():
+                            # run#28 (2026-10-17)：掣顯示 "Renewal cooldown HH:MM:SS"
+                            # 表示頭先已經續過（多數係人手撳咗）—— 唔好撳，
+                            # 當倒計時處理，下面 else 分支會記「⏳ 未到續期時間」skip，
+                            # 唔會再去點個冷卻緊嘅掣然後等一個永遠唔會開嘅彈窗。
+                            match = re.search(r"(\d{2}:\d{2}:\d{2})", button_text)
+                            if match:
+                                countdown_text = match.group(1)
+                            print(f"✅ 檢測到續期冷卻中 (剩餘 {countdown_text or '?'})——最近已續期，跳過")
+                            break
                         elif "Renew" in button_text and "in" not in button_text.lower():
                             outer_renew_selector = selector
                             print(f"✅ 续期按钮可用: '{button_text}'")

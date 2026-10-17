@@ -549,12 +549,14 @@ def wait_for_turnstile_pass(sb, timeout=60):
     # 先 render，12s grace 會假陰性「頁面無挑戰」→ 掣永遠鎖死）。
     # 每輪先剷走私隱彈窗；寬限期內每逢第 5 輪 dump 一次現場。
     iframe_seen = False
+    widget_ever_seen = False  # run#27：只在真偵測到 widget 時先置 True（唔好同下面硬等分支混埋）
     grace = min(25, timeout)
     diag_i = 0
     while time.time() - start < grace:
         dismiss_consent_popup(sb)
         if _turnstile_iframe_present(sb) or _turnstile_widget_present(sb):
             iframe_seen = True
+            widget_ever_seen = True
             print("🔍 Turnstile 挑戰已出現（iframe/widget 容器）...")
             break
         if _turnstile_solved(sb):
@@ -589,6 +591,7 @@ def wait_for_turnstile_pass(sb, timeout=60):
     # 座標）—— v4 run#18 實證 `python -m uc_gui_click_captcha` module 根本唔存在，
     # capture_output 吞晒錯誤靜默失敗；01 倉 subprocess 寫法同理從未真正撳過。
     captcha_i = 0
+    no_widget_rounds = 0
     while time.time() - start < timeout:
         dismiss_consent_popup(sb)
         # context 防護：clicker 撳完可以將 driver 留低喺 turnstile iframe
@@ -606,16 +609,28 @@ def wait_for_turnstile_pass(sb, timeout=60):
         if _renew_button_unlocked(sb):
             print("🔓 Renew 按鈕已解鎖（bot check 已通過）")
             return True
-        captcha_i += 1
-        if IS_X11:
-            try:
-                sb.uc_gui_click_captcha()
-                print(f"🖱️ captcha clicker 第 {captcha_i} 次：已撳出")
-            except Exception as e:
-                print(f"⚠️ uc_gui_click_captcha 失败: {str(e)[:150]}")
-                if captcha_i % 3 == 0:
-                    sb.save_screenshot(f"diag_captcha_fail_{captcha_i}.png")
-                    _dump_turnstile_dom(sb)
+        if _turnstile_iframe_present(sb) or _turnstile_widget_present(sb):
+            # 有 widget 先至值得撳 —— run#27 教訓：無 widget 時 42 次盲點
+            # 全係對空氣輸出，白白燒咗成個 timeout。
+            widget_ever_seen = True
+            no_widget_rounds = 0
+            captcha_i += 1
+            if IS_X11:
+                try:
+                    sb.uc_gui_click_captcha()
+                    print(f"🖱️ captcha clicker 第 {captcha_i} 次：已撳出")
+                except Exception as e:
+                    print(f"⚠️ uc_gui_click_captcha 失败: {str(e)[:150]}")
+                    if captcha_i % 3 == 0:
+                        sb.save_screenshot(f"diag_captcha_fail_{captcha_i}.png")
+                        _dump_turnstile_dom(sb)
+        else:
+            # 無 widget —— 唔盲點，淨係等 render；每 30s dump 一次現場
+            no_widget_rounds += 1
+            if no_widget_rounds == 1 or no_widget_rounds % 6 == 0:
+                print(f"⏳ 未見 Turnstile widget（已等 {no_widget_rounds * 5}s），不盲點，繼續等 render")
+                sb.save_screenshot(f"diag_no_widget_{no_widget_rounds}.png")
+                _dump_turnstile_dom(sb)
         sb.sleep(5)
 
     # 最後機會輪詢：run#19 實證——clicker 撳中咗 captcha（截圖 Success!），
@@ -626,7 +641,11 @@ def wait_for_turnstile_pass(sb, timeout=60):
             return True
         sb.sleep(3)
 
-    print(f"❌ Turnstile 验证超时未通过（掣狀態: {_renew_button_state(sb)}）")
+    if not widget_ever_seen:
+        print("❌ Turnstile widget 從未渲染（全程無 iframe/widget 節點）——"
+              f"挑戰未出現，非撳唔中；掣狀態: {_renew_button_state(sb)}")
+    else:
+        print(f"❌ Turnstile 验证超时未通过（掣狀態: {_renew_button_state(sb)}）")
     _dump_popup_dom(sb)
     _dump_turnstile_dom(sb)
     sb.save_screenshot("turnstile_timeout.png")
